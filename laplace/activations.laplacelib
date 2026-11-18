@@ -1,0 +1,128 @@
+// Activation Functions Map ================================================================================================================
+// 1. act_identity z       -> z 
+// 2. act_tanh             -> tanh z
+// 3. act_logistics        -> 1 / (1 + e^-z)
+// 4. act_softplus         -> log(1 + e^z)
+// 5. act_relu             -> max(0, z)
+// 6. act_silu             -> z logistic(z)
+
+
+// 1. act_identity z -> z ===================================================================================================================
+//@laplace
+//@brief Identity activation, phi(z) = z, applied element-wise.
+//@param matrix z : Pre-activations (any shape; overloads for real, vector, row_vector).
+//@return matrix : z unchanged.
+//@math
+// \phi(z) = z
+pub real act_identity(real z){
+    return z;
+}
+pub matrix act_identity(matrix z){
+    return z;
+}
+pub vector act_identity(vector z){
+    return z;
+}
+pub row_vector act_identity(row_vector z){
+    return z;
+}
+
+// 2. act_tanh -> tanh z =======================================================================================================================
+//@laplace
+//@brief Hyperbolic tangent activation, applied element-wise; default for HMC.
+//@param matrix z : Pre-activations (overloads for real, vector, row_vector).
+//@return matrix : tanh(z), each element in (-1, 1).
+//@math
+// \phi(z) = \tanh z = \frac{e^{z}-e^{-z}}{e^{z}+e^{-z}}
+pub real act_tanh(real z){
+    return (exp(z) - exp(-z)) / (exp(z) + exp(-z));
+}
+pub vector act_tanh(vector z){
+    return (exp(z) - exp(-z)) ./ (exp(z) + exp(-z));
+}
+pub matrix act_tanh(matrix z){
+    return (exp(z) - exp(-z)) / (exp(z) + exp(-z));
+}
+pub row_vector act_tanh(row_vector z){
+    return (exp(z) - exp(-z)) ./ (exp(z) + exp(-z));
+}
+
+// 3. act_logistics -> 1 / (1 + e^-z)==============================================================================================================
+//@laplace
+//@brief Logistic (sigmoid) activation, applied element-wise.
+//@param matrix z : Pre-activations (overloads for real, vector, row_vector).
+//@return matrix : 1 / (1 + exp(-z)), each element in (0, 1).
+//@math
+// \phi(z) = \frac{1}{1+e^{-z}}
+pub real act_logistics(real z){
+    return 1 / (1 + exp(-z));
+}
+pub vector act_logistics(vector z){
+    return 1 / (1 + exp(-z));
+}
+pub matrix act_logistics(matrix z){
+    return 1 / (1 + exp(-z));
+}
+pub row_vector act_logistics(row_vector z){
+    return 1 / (1 + exp(-z));
+}
+
+// 4. act_softplus -> log(1 + e^z) ==================================================================================================================
+//@laplace
+//@brief Softplus activation log(1 + exp(z)), element-wise; smooth ReLU.
+//@param matrix z : Pre-activations (overloads for real, vector, row_vector).
+//@return matrix : log1p_exp(z), each element > 0.
+//@math
+// \phi(z) = \log\left(1+e^{z}\right)
+pub real act_softplus(real z){
+    return log(1 + exp(z));
+}
+pub vector act_softplus(vector z){
+    return log(1 + exp(z));
+}
+pub matrix act_softplus(matrix z){
+    return log(1 + exp(z));
+}
+pub row_vector act_softplus(row_vector z){
+    return log(1 + exp(z));
+}
+
+// 5. act_relu -> max(0, z) =========================================================================================================================
+//@laplace
+//@brief ReLU activation max(0, z), element-wise; not recommended for HMC.
+//@param matrix z : Pre-activations (overloads for real, vector, row_vector).
+//@return matrix : fmax(z, 0), each element >= 0.
+//@math
+// \phi(z) = \max(0, z)
+pub real act_relu(real z){
+    return z > 0 ? z : 0; 
+}
+pub vector act_relu(vector z){
+    return fmax(z, 0);
+}
+pub matrix act_relu(matrix z){
+    return fmax(z, 0);
+}
+pub row_vector act_relu(row_vector z){
+    return fmax(z, 0);
+}
+
+// 6. act_silu -> z logistic(z) ===================================================================================================================
+//@laplace
+//@brief SiLU / swish activation z * logistic(z), element-wise.
+//@param matrix z : Pre-activations (overloads for real, vector, row_vector).
+//@return matrix : z .* inv_logit(z), each element >= -0.2785.
+//@math
+// \phi(z) = \frac{z}{1+e^{-z}}
+pub real act_silu(real z){
+    return z * inv_logit(z);
+}
+pub vector act_silu(vector z){
+    return z .* inv_logit(z);
+}
+pub matrix act_silu(matrix z){
+    return z * inv_logit(z);
+}
+pub row_vector act_silu(row_vector z){
+    return z .* inv_logit(z);
+}
