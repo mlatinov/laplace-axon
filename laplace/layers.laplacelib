@@ -1,0 +1,288 @@
+// Functions the map from inputs to pre-activations, and the map from the last hidden layer to the output ==========================================
+// 1.  affine          : Pre-activations of a layer: weighted inputs plus bias. - Applying an activation to this gives the hidden layer.
+// 2.  linear_out      : Output layer: a weighted sum of the last hidden layer. - The network’s output on the link scale.
+// 
+// Layers return hidden activations (a matrix) for composing deeper networks:
+// 3.  dense           : One hidden layer, for a batch of rows.
+// 4.  dense_vec       : One hidden layer, for a single input vector.
+// 5.  dense_res       : Residual layer: identity plus a learned correction.
+// 6.  dense_stack     : A stack of equal-width hidden layers.
+// 7.  dense_res_stack : A stack of residual layers.
+// 
+// Networks return the final output: mlp1, mlp1_vec, mlp2, mlp2_vec, mlp1_multi.
+// 8.  mlp1            : One-hidden-layer network
+// 9.  mlp1_vec        : One-hidden-layer network at a single input.
+// 10. mlp2            : Two-hidden-layer network, with an activation per layer.
+// 11. mlp2_vec        : Two-hidden-layer network at a single input.
+// 12. mlp1_multi      : One hidden layer shared by K outputs.
+//
+// Fixed-activation wrappers are ordinary functions with tanh built in:
+// 13. mlp1_tanh       : Fixed-activation wrappers. 
+// 14. mlp1_logistics  : Fixed-activation wrappers. 
+// 15. mlp1_softplus   : Fixed-activation wrappers.
+
+// 1. affine : Pre-activations of a layer: weighted inputs plus bias. ===============================================================================
+//@laplace
+//@brief Affine map of a batch of inputs: pre-activations X * W' + 1 b'.
+//@param matrix X : Inputs, N x P, one row per unit of evaluation.
+//@param matrix W : Weights, H x P (row k = input weights of unit k).
+//@param vector b : Biases, length H.
+//@return matrix : Pre-activations Z, N x H.
+//@math
+// Z = X W^\top + \mathbf{1}_N b^\top, \quad Z_{ik} = b_k + \sum_{p=1}^{P} X_{ip} W_{kp}
+pub matrix affine(matrix X, matrix W, vector b){
+    return X * W' + rep_matrix(b', rows(b));
+}
+pub matrix affine(matrix X, matrix W){
+    return X * W';
+}
+pub vector affine(vector x, matrix W, vector b){
+    return W * x + b;
+}
+pub vector affine(vector x, matrix W){
+    return W * x;
+}
+
+// 2. linear_out : Output layer: a weighted sum of the last hidden layer. ===========================================================================
+//@laplace
+//@brief Output layer: weighted sum of hidden activations plus bias, one output per row.
+//@param matrix A : Hidden activations, N x H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias (pass 0 when the model has its own intercept).
+//@return vector  : Network output f, length N, on the link scale.
+//@math
+// f = A v + c \mathbf{1}_N, \quad f_i = c + \sum_{k=1}^{H} A_{ik} v_k
+pub real linear_out(vector a, vector v, real c){
+    return v' * a + c;
+}
+pub vector linear_out(matrix A, vector v, real c){
+    return A * v + rep_vector(c, rows(A));
+}
+pub vector linear_out(vector a, matrix V, real c){
+    return V * a + c;
+}
+pub matrix linear_out(matrix A, matrix V, vector c){
+    return A * V' + rep_matrix(c', rows(A));
+}
+
+// 3. dense : One hidden layer, for a batch of rows. ==============================================================================================
+//@laplace
+//@brief Dense layer: activation of an affine map, for a batch of rows.
+//@param matrix X : Layer input, N x P (data or previous layer's activations).
+//@param matrix W : Weights, H x P.
+//@param vector b : Biases, length H.
+//@param func act : Activation; must have a matrix overload (e.g. nn::act_tanh).
+//@return matrix  : Hidden activations A, N x H.
+//@math
+// A = \phi\left(X W^\top + \mathbf{1}_N b^\top\right),
+// A_{ik} = \phi\left(b_k + w_k^\top x_i\right)
+pub matrix dense(matrix X, matrix W, vector b, func(matrix) -> matrix act){
+    return act(X * W' + rep_matrix(b', rows(X)));
+}
+
+// 4. dense_vec : One hidden layer, for a single input vector. =====================================================================================
+//@laplace
+//@brief Dense layer for a single input vector.
+//@param vector x : Input, length P.
+//@param matrix W : Weights, H x P.
+//@param vector b : Biases, length H.
+//@param func act : Activation; must have a vector overload.
+//@return vector : Hidden activations a, length H.
+//@math
+// a = \phi\left(W x + b\right)
+pub vector dense_vec(vector x, matrix W, vector b, func(vector) -> vector act){
+    return act(W * x + b);
+}
+
+// 5. dense_res : Residual layer: identity plus a learned correction. ==============================================================================
+//@laplace
+//@brief Residual dense layer: A + eps * act(A W' + 1 b'); W must be H x H.
+//@param matrix A : Layer input, N x H.
+//@param matrix W : Weights, H x H.
+//@param vector b : Biases, length H.
+//@param real eps : Residual step size (e.g. 1 / number of residual layers).
+//@param func act : Activation; must have a matrix overload.
+//@return matrix : Updated activations, N x H.
+//@math
+// A' = A + \varepsilon \, \phi\left(A W^\top + \mathbf{1}_N b^\top\right)
+pub matrix dense_res(matrix A, matrix W, vector b, real eps, func(matrix) -> matrix act){
+    return A + eps * act(A * W' + rep_matrix(b', rows(A)));
+}
+
+// 6. dense_stack : A stack of equal-width hidden layers. ===========================================================================================
+//@laplace
+//@brief Stack of L equal-width dense layers; L = size(W) may be 0.
+//@param matrix A         : Input activations, N x H.
+//@param array[] matrix W : L weight matrices, each H x H.
+//@param array[] vector b : L bias vectors, each length H.
+//@param func act         : Activation; must have a matrix overload.
+//@return matrix          : Activations after the last layer, N x H.
+//@math
+// A^{(0)} = A,
+// A^{(l)} = \phi\left(A^{(l-1)} W_l^\top + \mathbf{1}_N b_l^\top\right), \; l = 1..L
+pub matrix dense_stack(matrix A, array[] matrix W, array[] vector b, func(matrix) -> matrix act){
+    int L = size(W);
+    if (L == 0) {
+        return A;
+    }
+    matrix[rows(A), cols(A)] Al = A;
+    for (l in 1:L) {
+        Al = act(Al * W[l]' + rep_matrix(b[l]', rows(Al)));
+    }
+
+    return Al;
+}
+
+// 7. dense_res_stack : A stack of residual layers ================================================================================================
+//@laplace
+//@brief Stack of L residual layers, each A + eps * act(A W_l' + 1 b_l').
+//@param matrix A         : Input activations, N x H.
+//@param array[] matrix W : L weight matrices, each H x H.
+//@param array[] vector b : L bias vectors, each length H.
+//@param real eps         : Residual step size (1 / L gives an Euler discretisation).
+//@param func act         : Activation; must have a matrix overload.
+//@return matrix          : Activations after the last layer, N x H.
+//@math
+// A^{(l)} = A^{(l-1)}
+// + \varepsilon \, \phi\left(A^{(l-1)} W_l^\top + \mathbf{1}_N b_l^\top\right), \; l = 1..L
+pub matrix dense_res_stack(matrix A, array[] matrix W, array[] vector b, real eps, func(matrix) -> matrix act){
+    int L = size(W);
+    if(L == 0){
+        return A;
+    }
+    matrix[rows(A), cols(A)] Al = A;
+    for(l in 1:L){
+        Al = Al[l - 1] + eps * act(Al[l - 1] * W[l]' + rep_matrix(b[l]', rows(Al)));
+    }
+}
+
+// 8. mlp1 : One-hidden-layer network ===============================================================================================================
+//@brief One-hidden-layer network evaluated at every row of X.
+//@param matrix X : Inputs, N x P (standardised).
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias (0 when the model has its own intercept).
+//@param func act : Activation; must have a matrix overload.
+//@return vector : f, length N: the network function at each row, link scale.
+//@math
+// f_i = c + \sum_{k=1}^{H} v_k \, \phi\left(b_k + w_k^\top x_i\right)
+pub vector mlp1(matrix X, matrix W, vector b, vector v, real c. func(matrix) -> matrix act){
+    return act(X * W' + rep_matrix(b', rows(X))) * v + rep_vector(c, rows(X));
+}
+
+// 9. mlp1_vec : One-hidden-layer network at a single input. ========================================================================================
+//@laplace
+//@brief One-hidden-layer network evaluated at a single input vector.
+//@param vector x : Input, length P.
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias.
+//@param func act : Activation; must have a vector overload.
+//@return real    : f(x) on the link scale.
+//@math
+// f(x) = c + v^\top \phi\left(W x + b\right)
+pub real mlp1_vec(vector x, matrix W, vector b, vector v, real c, func(vector) -> vector act){
+    return c + v' * act(W * x + b); 
+}
+
+// 10. mlp2 : Two-hidden-layer network, with an activation per layer.================================================================================
+//@laplace
+//@brief Two-hidden-layer network evaluated at every row of X.
+//@param matrix X  : Inputs, N x P.
+//@param matrix W1 : First-layer weights, H1 x P.
+//@param vector b1 : First-layer biases, length H1.
+//@param matrix W2 : Second-layer weights, H2 x H1.
+//@param vector b2 : Second-layer biases, length H2.
+//@param vector v  : Output weights, length H2.
+//@param real c    : Output bias.
+//@param func act1 : First-layer activation (matrix overload).
+//@param func act2 : Second-layer activation (matrix overload).
+//@return vector   : f, length N, link scale.
+//@math
+// f = \phi_2\left(\phi_1\left(X W_1^\top + \mathbf{1} b_1^\top\right) W_2^\top + \mathbf{1} b_2^\top\right) v + c \mathbf{1}
+pub vector mlp2(matrix X, matrix W1, vector b1, matrix W2, vector b2, vector v, real c, func(matrix) -> matrix act1, func(matrix) -> act2){
+    return act2(act1(X * W1' + rep_matrix(b1', rows(W1)) * W2'+ rep_matrix(b2', rows(W2)))) * v + rep_vector(c, rows(W2));
+}
+
+// 11. mlp2_vec : Two-hidden-layer network at a single input.========================================================================================
+//@laplace
+//@brief Two-hidden-layer network evaluated at a single input vector.
+//@param vector x  : Input, length P.
+//@param matrix W1 : H1 x P. @param vector b1 : length H1.
+//@param matrix W2 : H2 x H1. @param vector b2 : length H2.
+//@param vector v  : Output weights, length H2.
+//@param real c    : Output bias.
+//@param func act1 : First-layer activation (vector overload).
+//@param func act2 : Second-layer activation (vector overload).
+//@return real     : f(x), link scale.
+//@math
+// f(x) = c + v^\top \phi_2\left(W_2 \, \phi_1(W_1 x + b_1) + b_2\right)
+pub real mlp2_vec(vector x, matrix W1, vector b1, matrix W2, vector b2, vector v, real c, func(vector) -> vector act1, func(vector) -> vector act2){
+    return c + v' act2(W2 * act1(W1 * x + b1) + b2);
+}
+
+// 12. mlp1_multi : One hidden layer shared by K outputs.=============================================================================================
+//@laplace
+//@brief One hidden layer shared by K outputs.
+//@param matrix X : Inputs, N x P.
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param matrix V : Output weights, K x H (row j for output j).
+//@param vector c : Output biases, length K (zeros when the model has intercepts).
+//@param func act : Activation; must have a matrix overload.
+//@return matrix : F, N x K; column j is output function j at every row.
+//@math
+// F_{ij} = c_j + \sum_{k=1}^{H} V_{jk} \, \phi\left(b_k + w_k^\top x_i\right)
+pub matrix mlp1_multi(matrix X, matrix W, vector b, matrix V, vector c, func(matrix) -> matrix act){
+    return act(X * W' + rep_matrix(b', rows(W))) * V' + rep_vector(c', rows(W));
+}
+// 13. mlp1_tanh : Fixed-activation wrappers.===================================================================================================
+//@laplace
+//@brief tanh one-hidden-layer network as an ordinary function (usable in templates).
+//@param matrix X : Inputs, N x P.
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias.
+//@return vector  : f, length N.
+//@math
+// f_i = c + \sum_{k=1}^{H} v_k \tanh\left(b_k + w_k^\top x_i\right)
+pub vector mlp1_tanh(matrix X, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_tanh);
+}
+pub real mlp1_vec_tanh(vector x, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_tanh);
+}
+
+// 14. mlp1_logistics: Fixed-activation wrappers.===================================================================================================
+//@laplace
+//@brief logistics one-hidden-layer network as an ordinary function (usable in templates).
+//@param matrix X : Inputs, N x P.
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias.
+//@return vector  : f, length N.
+pub vector mlp1_logistics(matrix X, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_logistics);
+}
+pub real mlp1_vec_logistics(vector x, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_logistics);
+}
+// 15. mlp1_softplus: Fixed-activation wrappers. ==================================================================================================
+//@laplace
+//@brief softplus one-hidden-layer network as an ordinary function (usable in templates).
+//@param matrix X : Inputs, N x P.
+//@param matrix W : Hidden weights, H x P.
+//@param vector b : Hidden biases, length H.
+//@param vector v : Output weights, length H.
+//@param real c   : Output bias.
+//@return vector  : f, length N.
+pub vector mlp1_softplus(matrix X, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_softplus);
+}
+pub real mlp1_vec_softplus(vector x, matrix W, vector b, vector v, real c){
+    return mlp1(X, W, b, v, c, act_softplus);
+}
