@@ -1,0 +1,262 @@
+// A network’s weights are model parameters. Each one needs a declaration in parameters, usually
+// a scaled version in transformed parameters, and a prior in model. For a three-layer network
+// that is dozens of lines in three blocks, and getting the scaling right by hand is error-prone.
+
+// This Script Contains Templates for simplifying this process
+// 1. @use axon::dense_params(L1, H, P, 1.0, 1.0);                  : Hidden layer weights and biases 
+// 2. @use axon::dense_params_ard($name, $H, $P, $s_b, $rel_prior); : Hidden layer with a learned relevance per input (ARD)
+// 3. @use axon::dense_params_ordered($name, $H, $P, $s_w, $s_b);   : Hidden layer with ordered biases (breaks permutation symmetry)
+// 4. @use axon::stack_params($name, $L, $H, $s_w, $s_b);           : Weights for a stack of L equal-width layers.
+// 5. @use axon::out_params($name, $H, $omega);                     : Output weights with a fixed function scale.
+// 6. @use axon::out_params_tau(L1, H, normal(0, 0.3));             : Output weights with a learned function scale τ.
+// 7. @use axon::out_params_pos($name, $H, $omega);                 : Positive output weights (breaks sign-flip symmetry).
+// 8. @use axon::out_params_multi($name, $K, $H, $omega);           : Output weights for K outputs.
+// 9, @use nn::bias_param($name, $s_c); @use nn::bias_vec_param($name, $K, $s_c); : An output bias (scalar or vector).
+
+// 1 dense_params : Weights and biases of a hidden layer, fixed scales ==============================================================================================
+//@laplace
+//@brief Non-centred weights and biases of a dense layer with fan-in scaling.
+//@param ident $name : Prefix; declares ${name}_W (H x P) and ${name}_b (length H).
+//@param expr $H     : Number of units.
+//@param expr $P     : Number of inputs to the layer.
+//@param expr $s_w   : Input-driven pre-activation scale (default 1).
+//@param expr $s_b   : Bias scale (default 1).
+//@math
+// W_{kp} = \frac{s_w}{\sqrt{P}} Z_{kp}, \quad b_k = s_b \zeta_k,
+// Z_{kp}, \zeta_k \sim \mathrm{Normal}(0, 1)
+pub @template dense_params($name : ident, $H : expr, $P : expr, $s_w : expr, $s_b : expr){
+
+    parameters{
+        matrix[$H, $P] ${name}_W_raw;   // Z_kp
+        vector[$H]     ${name}_b_raw;   // zeta_k
+    }
+
+    transformed parameters{
+        matrix[$H, $P] ${name}_W = ($s_w / sqrt($P)) * ${name}_W_raw;
+        vector[$H]     ${name}_b = $s_b * ${name}_b_raw;
+    }
+
+    model{
+        to_vector(${name}_W_raw) ~ std_normal();
+        ${name}_b_raw            ~ std_normal();
+    }
+}
+
+// 2. dense_params_ard : Hidden layer with a learned relevance per input (ARD)======================================================================
+//@laplace
+//@brief Dense-layer weights with automatic relevance determination (one scale per input).
+//@param ident $name : Prefix; declares ${name}_W, ${name}_b, ${name}_rel (length P).
+//@param expr $H     : Number of units.
+//@param expr $P     : Number of inputs.
+//@param expr $s_b   : Bias scale.
+//@param expr $rel_prior : Distribution for the relevances, e.g. exponential(1).
+//@math
+// W_{kp} = \frac{\tau_p}{\sqrt{P}} Z_{kp}, \quad \tau_p \sim \text{rel\_prior},
+// b_k = s_b \zeta_k
+pub @template name($name : ident, $H : expr, $P : expr, $s_b : expr, $rel_prior : expr) {
+    
+    parameters{
+        matrix[$H, $P]        ${name}_W_raw;
+        vector[$H]            ${name}_b_raw; 
+        vector<lower = 0>[$P] ${name}_rel;
+    }
+    
+    transformed parameters{
+        matrix[$H, $P] ${name}_W = (${name}_rel / sqrt($P)) * ${name}_W_raw;
+        vector[$H]     ${name}_b = $s_b * ${name}_b_raw;
+    }
+
+    model{
+        to_vector(${name}_W_raw) ~ std_normal();
+        ${name}_b_raw            ~ std_normal();
+        ${name}_rel              ~ $rel_prior;
+    }
+}
+
+// 3. dense_params_ordered: Hidden layer with ordered biases (breaks permutation symmetry)===============================================================
+//@laplace
+//@brief Dense-layer weights with ordered biases, removing the H! unit permutations.
+//@param ident $name : Prefix; declares ${name}_W (H x P) and ordered ${name}_b.
+//@param expr $H     : Number of units.
+//@param expr $P     : Number of inputs.
+//@param expr $s_w   : Input-driven pre-activation scale.
+//@param expr $s_b   : Bias scale.
+//@math
+// W_{kp} = \frac{s_w}{\sqrt{P}} Z_{kp},
+// b_1 < \dots < b_H, \quad b_k \sim \mathrm{Normal}(0, s_b)
+pub @template dense_params_ordered($name: ident, $H: expr, $P : expr, $s_w : expr, $s_b : expr) {
+    
+    parameters{
+        matrix[$H, $P] ${name}_W_raw;
+        ordered[$H]    ${name}_b;
+    }
+
+    transformed parameters{
+        matrix[$H, $P] ${name}_W = ($s_w / sqrt($P)) * ${name}_W_raw;
+    }
+
+    model{
+        to_vector(${name}_W_raw) ~ std_normal();
+        ${name}_b                ~ normal(0, $s_b);
+    }
+
+}
+
+// 4. stack_params: Weights for a stack of L equal-width layers.===================================================================================
+//@laplace
+//@brief Non-centred weights for L equal-width layers (for dense_stack / dense_res_stack).
+//@param ident $name : Prefix; declares ${name}_W (array[L] matrix[H, H]) and ${name}_b.
+//@param expr $L     : Number of layers.
+//@param expr $H     : Width.
+//@param expr $s_w   : Pre-activation scale per layer.
+//@param expr $s_b   : Bias scale.
+//@math
+// W_l = \frac{s_w}{\sqrt{H}} Z_l, \quad b_l = s_b \zeta_l, \quad l = 1..L
+pub @template stack_params($name: ident, $L: expr, $H : expr, $s_w : expr, $s_b : expr) {
+
+    parameters{
+        array[$L] matrix[$H, $H] ${name}_w_raw;
+        array[$L] vector[$L]     ${name}_b_raw;
+    }
+    
+    transformed parameters{
+        array[$L] matrix[$H, $H] ${name}_w;
+        array[$L] vector[$H]     ${name}_b;
+
+        for(l in 1:$L){
+            ${name}_w[l] = ($s_w / sqrt($H)) /  ${name}_w_raw[l];
+            ${name}_b[l] =  $s_b * ${name}_b_raw[l];
+        }
+    }
+}
+
+// 5. out_params: Output weights with a fixed function scale. ====================================================================================
+//@laplace
+//@brief Output weights with width scaling: prior SD of f is about omega, independent of H.
+//@param ident $name : Prefix; declares ${name}_v (length H).
+//@param expr $H     : Width of the last hidden layer.
+//@param expr $omega : Function scale on the link scale.
+//@math
+// v_k = \frac{\omega}{\sqrt{H}} z_k, \quad z_k \sim \mathrm{Normal}(0, 1)
+pub @template out_params($name: ident, $H: expr, $omega : expr) {
+    
+    parameters {
+        vector[$H] ${name}_v_raw;
+    }
+    
+    transformed parameters{
+        vector[$H] ${name}_v = ($omega / sqrt($H)) * ${name}_v_raw;
+    }
+
+    model{
+        ${name}_v_raw ~ std_normal();
+    }
+}
+
+// 6. out_params_tau : Output weights with a learned function scale tau. =============================================================================
+//@laplace
+//@brief Output weights with a learned function scale tau (default for embedded networks).
+//@param ident $name     : Prefix; declares ${name}_v (length H) and ${name}_tau.
+//@param expr $H         : Width of the last hidden layer.
+//@param expr $tau_prior : Distribution for tau, e.g. normal(0, 0.3) (half-normal).
+//@math
+// v_k = \frac{\tau}{\sqrt{H}} z_k, \quad z_k \sim \mathrm{Normal}(0, 1),
+// \tau \sim \text{tau\_prior}
+pub @template out_params_tau($name : ident, $H : expr, $tau_prior : expr){
+
+    parameters{
+        vector[$H] ${name}_v_raw;
+        real<lower = 0> ${name}_tau;
+    }
+
+    transformed parameters{
+        vector[$H] ${name}_v = (${name}_tau / sqrt($H)) / ${name}_v_raw;
+    }
+
+    model{
+        ${name}_v_raw ~ std_normal();
+        ${name}_tau   ~ $tau_prior; 
+    }
+}
+
+// 7. out_params_pos: Positive output weights (breaks sign-flip symmetry) ==============================================================================
+//@laplace
+//@brief Positive output weights: removes sign-flip symmetry for odd activations (tanh).
+//@param ident $name : Prefix; declares ${name}_v (length H, all > 0).
+//@param expr $H     : Width of the last hidden layer.
+//@param expr $omega : Function scale.
+//@math
+// v_k = \frac{\omega}{\sqrt{H}} z_k, \quad z_k \sim \mathrm{Normal}^{+}(0, 1)
+pub @template out_params_pos($name : ident, $H : expr, $omega : expr){
+    
+    parameters{
+        vector<lower = 0>[$H] ${name}_v_raw;
+    }
+
+    transformed parameters{
+        vector<lower = 0>[$H] ${name}_v = ($omega / sqrt($H)) * ${name}_v_raw;
+    }
+
+    model{
+        ${name}_v_raw ~ std_normal();
+    }
+}
+
+// 8. out_params_multi: Output weights for K outputs. ================================================================================================
+//@laplace
+//@brief Output weights for K outputs sharing one hidden layer.
+//@param ident $name : Prefix; declares ${name}_V (K x H).
+//@param expr $K     : Number of outputs.
+//@param expr $H     : Width of the last hidden layer.
+//@param expr $omega : Function scale per output.
+//@math
+// V_{jk} = \frac{\omega}{\sqrt{H}} Z_{jk}, \quad Z_{jk} \sim \mathrm{Normal}(0, 1)
+pub @template out_params_multi($name : ident, $K : expr, $H : expr, $omega : expr){
+
+    parameters{
+        matrix[$K, $H] ${name}_v_raw;
+    }
+
+    transformed parameters{
+        matrix[$K, $H] ${name}_v = ($omega / sqrt($H)) * ${name}_v_raw;
+    }
+
+    model{
+        to_vector(${name}_v_raw) ~ std_normal();
+    }
+}
+// 9. bias_param($name, $s_c); bias_vec_param($name, $K, $s_c); : An output bias (scalar or vector). =================================================
+//@laplace
+//@brief Output bias of a network that is the whole mean function (scalar).
+//@param ident $name : Prefix; declares ${name}_c.
+//@param expr $s_c   : Prior scale.
+//@math
+// c \sim \mathrm{Normal}(0, s_c)
+pub @template bias_param($name : ident, $s_c : expr){
+    
+    parameters{
+        real ${name}_c;
+    }
+
+    model{
+        ${name}_c ~ normal(0, $s_c);
+    }
+}
+
+//@laplace
+//@brief Output bias of a network that is the whole mean function (vector).
+//@param ident $name : Prefix; declares ${name}_c.
+//@param expr $s_c   : Prior scale.
+//@param expr $K     : Size of the vector
+//@math
+// c \sim \mathrm{Normal}(0, s_c)
+pub @template bias_param($name : ident, $s_c : expr, $K : expr){
+    
+    parameters{
+        vector[$K] ${name}_c;
+    }
+
+    model{
+        ${name}_c ~ normal(0, $s_c);
+    }
+}
