@@ -40,7 +40,7 @@ Each has four overloads: `real`, `vector`, `row_vector`, `matrix`. Batch network
 |---|---|---|
 | `act_identity` | `z` | turns a network into a linear model; useful for tests |
 | `act_tanh` | `tanh(z)` | **default**: smooth, bounded, extrapolates as a constant |
-| `act_logistic` | `1 / (1 + exp(-z))` | output in (0, 1); natural for gates |
+| `act_logistics` | `1 / (1 + exp(-z))` | output in (0, 1); natural for gates |
 | `act_softplus` | `log1p_exp(z)` | smooth ReLU; extrapolates linearly |
 | `act_relu` | `fmax(z, 0)` | provided for comparison; the kink is hard on HMC |
 | `act_silu` | `z * inv_logit(z)` | smooth, slightly non-monotone |

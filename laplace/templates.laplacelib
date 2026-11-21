@@ -11,7 +11,8 @@
 // 6. @use axon::out_params_tau(L1, H, normal(0, 0.3));             : Output weights with a learned function scale τ.
 // 7. @use axon::out_params_pos($name, $H, $omega);                 : Positive output weights (breaks sign-flip symmetry).
 // 8. @use axon::out_params_multi($name, $K, $H, $omega);           : Output weights for K outputs.
-// 9, @use nn::bias_param($name, $s_c); @use nn::bias_vec_param($name, $K, $s_c); : An output bias (scalar or vector).
+// 9. @use axon::bias_param($name, $s_c); @use axon::bias_vec_param($name, $K, $s_c); : An output bias (scalar or vector).
+// 10. @use axon::mlp1_tanh_block($f, $X, $N, $P, $H, $tau_prior);  : A whole one-hidden-layer tanh network, as vector[N] f.
 
 // 1 dense_params : Weights and biases of a hidden layer, fixed scales ==============================================================================================
 //@laplace
@@ -53,7 +54,7 @@ pub @template dense_params($name : ident, $H : expr, $P : expr, $s_w : expr, $s_
 //@math
 // W_{kp} = \frac{\tau_p}{\sqrt{P}} Z_{kp}, \quad \tau_p \sim \text{rel\_prior},
 // b_k = s_b \zeta_k
-pub @template name($name : ident, $H : expr, $P : expr, $s_b : expr, $rel_prior : expr) {
+pub @template dense_params_ard($name : ident, $H : expr, $P : expr, $s_b : expr, $rel_prior : expr) {
     
     parameters{
         matrix[$H, $P]        ${name}_W_raw;
@@ -62,7 +63,7 @@ pub @template name($name : ident, $H : expr, $P : expr, $s_b : expr, $rel_prior 
     }
     
     transformed parameters{
-        matrix[$H, $P] ${name}_W = (${name}_rel / sqrt($P)) * ${name}_W_raw;
+        matrix[$H, $P] ${name}_W = diag_post_multiply(${name}_W_raw, ${name}_rel) / sqrt($P);
         vector[$H]     ${name}_b = $s_b * ${name}_b_raw;
     }
 
@@ -115,17 +116,24 @@ pub @template dense_params_ordered($name: ident, $H: expr, $P : expr, $s_w : exp
 pub @template stack_params($name: ident, $L: expr, $H : expr, $s_w : expr, $s_b : expr) {
 
     parameters{
-        array[$L] matrix[$H, $H] ${name}_w_raw;
-        array[$L] vector[$L]     ${name}_b_raw;
+        array[$L] matrix[$H, $H] ${name}_W_raw;
+        array[$L] vector[$H]     ${name}_b_raw;
     }
     
     transformed parameters{
-        array[$L] matrix[$H, $H] ${name}_w;
+        array[$L] matrix[$H, $H] ${name}_W;
         array[$L] vector[$H]     ${name}_b;
 
         for(l in 1:$L){
-            ${name}_w[l] = ($s_w / sqrt($H)) /  ${name}_w_raw[l];
+            ${name}_W[l] = ($s_w / sqrt($H)) * ${name}_W_raw[l];
             ${name}_b[l] =  $s_b * ${name}_b_raw[l];
+        }
+    }
+
+    model{
+        for(l in 1:$L){
+            to_vector(${name}_W_raw[l]) ~ std_normal();
+            ${name}_b_raw[l]            ~ std_normal();
         }
     }
 }
@@ -170,7 +178,7 @@ pub @template out_params_tau($name : ident, $H : expr, $tau_prior : expr){
     }
 
     transformed parameters{
-        vector[$H] ${name}_v = (${name}_tau / sqrt($H)) / ${name}_v_raw;
+        vector[$H] ${name}_v = (${name}_tau / sqrt($H)) * ${name}_v_raw;
     }
 
     model{
@@ -214,15 +222,15 @@ pub @template out_params_pos($name : ident, $H : expr, $omega : expr){
 pub @template out_params_multi($name : ident, $K : expr, $H : expr, $omega : expr){
 
     parameters{
-        matrix[$K, $H] ${name}_v_raw;
+        matrix[$K, $H] ${name}_V_raw;
     }
 
     transformed parameters{
-        matrix[$K, $H] ${name}_v = ($omega / sqrt($H)) * ${name}_v_raw;
+        matrix[$K, $H] ${name}_V = ($omega / sqrt($H)) * ${name}_V_raw;
     }
 
     model{
-        to_vector(${name}_v_raw) ~ std_normal();
+        to_vector(${name}_V_raw) ~ std_normal();
     }
 }
 // 9. bias_param($name, $s_c); bias_vec_param($name, $K, $s_c); : An output bias (scalar or vector). =================================================
@@ -245,12 +253,12 @@ pub @template bias_param($name : ident, $s_c : expr){
 
 //@laplace
 //@brief Output bias of a network that is the whole mean function (vector).
-//@param ident $name : Prefix; declares ${name}_c.
+//@param ident $name : Prefix; declares ${name}_c (length K).
+//@param expr $K     : Size of the vector.
 //@param expr $s_c   : Prior scale.
-//@param expr $K     : Size of the vector
 //@math
 // c \sim \mathrm{Normal}(0, s_c)
-pub @template bias_param($name : ident, $s_c : expr, $K : expr){
+pub @template bias_vec_param($name : ident, $K : expr, $s_c : expr){
     
     parameters{
         vector[$K] ${name}_c;
@@ -258,5 +266,41 @@ pub @template bias_param($name : ident, $s_c : expr, $K : expr){
 
     model{
         ${name}_c ~ normal(0, $s_c);
+    }
+}
+
+// 10. mlp1_tanh_block : A whole one-hidden-layer tanh network. =======================================================================================
+//@laplace
+//@brief Quick start: weights, priors and the output of a one-hidden-layer tanh network, as vector[N] f.
+//@param ident $f        : Name of the network output; also the prefix of its weights (${f}_W, ${f}_b, ${f}_v, ${f}_tau).
+//@param expr $X         : Inputs, N x P (standardised).
+//@param expr $N         : Number of rows of X.
+//@param expr $P         : Number of inputs.
+//@param expr $H         : Number of hidden units.
+//@param expr $tau_prior : Distribution for the function scale tau, e.g. normal(0, 1) (half-normal).
+//@math
+// f = \tanh\left(X W^\top + \mathbf{1} b^\top\right) v, \quad
+// W_{kp} = \frac{Z_{kp}}{\sqrt{P}}, \; b_k = \zeta_k, \; v_k = \frac{\tau}{\sqrt{H}} z_k
+pub @template mlp1_tanh_block($f : ident, $X : expr, $N : expr, $P : expr, $H : expr, $tau_prior : expr){
+
+    parameters{
+        matrix[$H, $P]  ${f}_W_raw;
+        vector[$H]      ${f}_b_raw;
+        vector[$H]      ${f}_v_raw;
+        real<lower = 0> ${f}_tau;
+    }
+
+    transformed parameters{
+        matrix[$H, $P] ${f}_W = (1 / sqrt($P)) * ${f}_W_raw;
+        vector[$H]     ${f}_b = ${f}_b_raw;
+        vector[$H]     ${f}_v = (${f}_tau / sqrt($H)) * ${f}_v_raw;
+        vector[$N]     $f     = mlp1_tanh($X, ${f}_W, ${f}_b, ${f}_v, 0);
+    }
+
+    model{
+        to_vector(${f}_W_raw) ~ std_normal();
+        ${f}_b_raw            ~ std_normal();
+        ${f}_v_raw            ~ std_normal();
+        ${f}_tau              ~ $tau_prior;
     }
 }

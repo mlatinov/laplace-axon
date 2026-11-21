@@ -35,16 +35,16 @@ pub row_vector act_identity(row_vector z){
 //@math
 // \phi(z) = \tanh z = \frac{e^{z}-e^{-z}}{e^{z}+e^{-z}}
 pub real act_tanh(real z){
-    return (exp(z) - exp(-z)) / (exp(z) + exp(-z));
+    return tanh(z);
 }
 pub vector act_tanh(vector z){
-    return (exp(z) - exp(-z)) ./ (exp(z) + exp(-z));
+    return tanh(z);
 }
 pub matrix act_tanh(matrix z){
-    return (exp(z) - exp(-z)) / (exp(z) + exp(-z));
+    return tanh(z);
 }
 pub row_vector act_tanh(row_vector z){
-    return (exp(z) - exp(-z)) ./ (exp(z) + exp(-z));
+    return tanh(z);
 }
 
 // 3. act_logistics -> 1 / (1 + e^-z)==============================================================================================================
@@ -55,16 +55,16 @@ pub row_vector act_tanh(row_vector z){
 //@math
 // \phi(z) = \frac{1}{1+e^{-z}}
 pub real act_logistics(real z){
-    return 1 / (1 + exp(-z));
+    return inv_logit(z);
 }
 pub vector act_logistics(vector z){
-    return 1 / (1 + exp(-z));
+    return inv_logit(z);
 }
 pub matrix act_logistics(matrix z){
-    return 1 / (1 + exp(-z));
+    return inv_logit(z);
 }
 pub row_vector act_logistics(row_vector z){
-    return 1 / (1 + exp(-z));
+    return inv_logit(z);
 }
 
 // 4. act_softplus -> log(1 + e^z) ==================================================================================================================
@@ -75,16 +75,16 @@ pub row_vector act_logistics(row_vector z){
 //@math
 // \phi(z) = \log\left(1+e^{z}\right)
 pub real act_softplus(real z){
-    return log(1 + exp(z));
+    return log1p_exp(z);
 }
 pub vector act_softplus(vector z){
-    return log(1 + exp(z));
+    return log1p_exp(z);
 }
 pub matrix act_softplus(matrix z){
-    return log(1 + exp(z));
+    return log1p_exp(z);
 }
 pub row_vector act_softplus(row_vector z){
-    return log(1 + exp(z));
+    return log1p_exp(z);
 }
 
 // 5. act_relu -> max(0, z) =========================================================================================================================
@@ -121,7 +121,7 @@ pub vector act_silu(vector z){
     return z .* inv_logit(z);
 }
 pub matrix act_silu(matrix z){
-    return z * inv_logit(z);
+    return z .* inv_logit(z);
 }
 pub row_vector act_silu(row_vector z){
     return z .* inv_logit(z);

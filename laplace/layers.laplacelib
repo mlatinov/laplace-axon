@@ -152,11 +152,13 @@ pub matrix dense_res_stack(matrix A, array[] matrix W, array[] vector b, real ep
     }
     matrix[rows(A), cols(A)] Al = A;
     for(l in 1:L){
-        Al = Al[l - 1] + eps * act(Al[l - 1] * W[l]' + rep_matrix(b[l]', rows(Al)));
+        Al = Al + eps * act(Al * W[l]' + rep_matrix(b[l]', rows(Al)));
     }
+    return Al;
 }
 
 // 8. mlp1 : One-hidden-layer network ===============================================================================================================
+//@laplace
 //@brief One-hidden-layer network evaluated at every row of X.
 //@param matrix X : Inputs, N x P (standardised).
 //@param matrix W : Hidden weights, H x P.
@@ -167,7 +169,7 @@ pub matrix dense_res_stack(matrix A, array[] matrix W, array[] vector b, real ep
 //@return vector : f, length N: the network function at each row, link scale.
 //@math
 // f_i = c + \sum_{k=1}^{H} v_k \, \phi\left(b_k + w_k^\top x_i\right)
-pub vector mlp1(matrix X, matrix W, vector b, vector v, real c. func(matrix) -> matrix act){
+pub vector mlp1(matrix X, matrix W, vector b, vector v, real c, func(matrix) -> matrix act){
     return act(X * W' + rep_matrix(b', rows(X))) * v + rep_vector(c, rows(X));
 }
 
@@ -202,8 +204,8 @@ pub real mlp1_vec(vector x, matrix W, vector b, vector v, real c, func(vector) -
 //@return vector   : f, length N, link scale.
 //@math
 // f = \phi_2\left(\phi_1\left(X W_1^\top + \mathbf{1} b_1^\top\right) W_2^\top + \mathbf{1} b_2^\top\right) v + c \mathbf{1}
-pub vector mlp2(matrix X, matrix W1, vector b1, matrix W2, vector b2, vector v, real c, func(matrix) -> matrix act1, func(matrix) -> act2){
-    return act2(act1(X * W1' + rep_matrix(b1', rows(W1)) * W2'+ rep_matrix(b2', rows(W2)))) * v + rep_vector(c, rows(W2));
+pub vector mlp2(matrix X, matrix W1, vector b1, matrix W2, vector b2, vector v, real c, func(matrix) -> matrix act1, func(matrix) -> matrix act2){
+    return act2(act1(X * W1' + rep_matrix(b1', rows(X))) * W2' + rep_matrix(b2', rows(X))) * v + rep_vector(c, rows(X));
 }
 
 // 11. mlp2_vec : Two-hidden-layer network at a single input.========================================================================================
@@ -220,7 +222,7 @@ pub vector mlp2(matrix X, matrix W1, vector b1, matrix W2, vector b2, vector v, 
 //@math
 // f(x) = c + v^\top \phi_2\left(W_2 \, \phi_1(W_1 x + b_1) + b_2\right)
 pub real mlp2_vec(vector x, matrix W1, vector b1, matrix W2, vector b2, vector v, real c, func(vector) -> vector act1, func(vector) -> vector act2){
-    return c + v' act2(W2 * act1(W1 * x + b1) + b2);
+    return c + v' * act2(W2 * act1(W1 * x + b1) + b2);
 }
 
 // 12. mlp1_multi : One hidden layer shared by K outputs.=============================================================================================
@@ -236,7 +238,7 @@ pub real mlp2_vec(vector x, matrix W1, vector b1, matrix W2, vector b2, vector v
 //@math
 // F_{ij} = c_j + \sum_{k=1}^{H} V_{jk} \, \phi\left(b_k + w_k^\top x_i\right)
 pub matrix mlp1_multi(matrix X, matrix W, vector b, matrix V, vector c, func(matrix) -> matrix act){
-    return act(X * W' + rep_matrix(b', rows(W))) * V' + rep_vector(c', rows(W));
+    return act(X * W' + rep_matrix(b', rows(X))) * V' + rep_matrix(c', rows(X));
 }
 // 13. mlp1_tanh : Fixed-activation wrappers.===================================================================================================
 //@laplace
@@ -253,7 +255,7 @@ pub vector mlp1_tanh(matrix X, matrix W, vector b, vector v, real c){
     return mlp1(X, W, b, v, c, act_tanh);
 }
 pub real mlp1_vec_tanh(vector x, matrix W, vector b, vector v, real c){
-    return mlp1(X, W, b, v, c, act_tanh);
+    return mlp1_vec(x, W, b, v, c, act_tanh);
 }
 
 // 14. mlp1_logistics: Fixed-activation wrappers.===================================================================================================
@@ -269,7 +271,7 @@ pub vector mlp1_logistics(matrix X, matrix W, vector b, vector v, real c){
     return mlp1(X, W, b, v, c, act_logistics);
 }
 pub real mlp1_vec_logistics(vector x, matrix W, vector b, vector v, real c){
-    return mlp1(X, W, b, v, c, act_logistics);
+    return mlp1_vec(x, W, b, v, c, act_logistics);
 }
 // 15. mlp1_softplus: Fixed-activation wrappers. ==================================================================================================
 //@laplace
@@ -284,5 +286,5 @@ pub vector mlp1_softplus(matrix X, matrix W, vector b, vector v, real c){
     return mlp1(X, W, b, v, c, act_softplus);
 }
 pub real mlp1_vec_softplus(vector x, matrix W, vector b, vector v, real c){
-    return mlp1(X, W, b, v, c, act_softplus);
+    return mlp1_vec(x, W, b, v, c, act_softplus);
 }
